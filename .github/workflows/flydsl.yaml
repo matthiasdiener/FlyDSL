@@ -1,5 +1,9 @@
 name: Fly DSL test
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   push:
     branches:
