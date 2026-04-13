@@ -405,7 +405,7 @@ def _dist_worker(
         elif mode == "cudagraph":
             if not hasattr(fa, "capture"):
                 if rank == 0:
-                    print("[test_flydsl_allreduce] WARN: fa has no capture(); skipping cudagraph.", flush=True)
+                    print("[test_allreduce] WARN: fa has no capture(); skipping cudagraph.", flush=True)
                 result_dict[rank] = {
                     "rank": rank, "shape": shape, "dtype": dtype_str, "world_size": world_size,
                     "mode": "cudagraph", "max_error": float("nan"), "avg_time_us": 0.0,
@@ -731,7 +731,22 @@ _4GPU_PARAMS = [
 ]
 
 
-def _run_subprocess_test(*, world_size, shape, dtype_str, mode):
+# 8-GPU benchmark configurations: cover all 3 kernel paths × 3 dtypes, cudagraph mode.
+#   small  (2×7168)    → 1-stage kernel
+#   medium (128×8192)  → 2-stage kernel
+#   large  (1024×8192) → write-mode kernel
+_BENCHMARK_PARAMS = [
+    # (shape,           dtype_str, mode)
+    ((2,    7168),  "fp16", "cudagraph"),
+    ((32,   8192),  "fp32", "cudagraph"),
+    ((128,  8192),  "fp16", "cudagraph"),
+    ((1024, 7168),  "bf16", "cudagraph"),
+    ((4096, 8192),  "bf16", "cudagraph")
+]
+
+
+def _run_subprocess(*, world_size, shape, dtype_str, mode, iters=10, warmup=2,
+                    output_csv=None, timeout=600):
     """Launch the allreduce harness in a subprocess and assert success."""
     import subprocess as _sp
 
@@ -741,19 +756,45 @@ def _run_subprocess_test(*, world_size, shape, dtype_str, mode):
     cmd = [
         sys.executable, __file__,
         "--world_size",     str(world_size),
-        "--iters",          "10",
-        "--warmup",         "2",
+        "--iters",          str(iters),
+        "--warmup",         str(warmup),
         "--shapes",         shape_str,
         "--mode",           mode,
         "--allreduce_impl", "flydsl",
     ]
-    result = _sp.run(cmd, env=env, timeout=600, capture_output=True, text=True)
+    if output_csv:
+        cmd += ["--output_csv", output_csv]
+    result = _sp.run(cmd, env=env, timeout=timeout, capture_output=True, text=True)
     assert result.returncode == 0, (
         f"{world_size}-GPU allreduce FAILED: shape={shape}, dtype={dtype_str}, "
         f"mode={mode} (exit code {result.returncode})\n"
         f"stdout (last 2000 chars):\n{result.stdout[-2000:]}\n"
         f"stderr (last 2000 chars):\n{result.stderr[-2000:]}"
     )
+    return result
+
+
+def _run_subprocess_test(*, world_size, shape, dtype_str, mode):
+    """Launch the allreduce accuracy test in a subprocess."""
+    _run_subprocess(world_size=world_size, shape=shape, dtype_str=dtype_str, mode=mode)
+
+
+def _run_subprocess_benchmark(*, world_size, shape, dtype_str, mode):
+    """Launch the allreduce benchmark in a subprocess with more iterations.
+
+    Returns the CSV output path for downstream baseline comparison.
+    """
+    shape_tag = "x".join(str(d) for d in shape)
+    csv_path = f"/tmp/allreduce_bench_{shape_tag}_{dtype_str}_{mode}.csv"
+    result = _run_subprocess(
+        world_size=world_size, shape=shape, dtype_str=dtype_str, mode=mode,
+        iters=51, warmup=5, output_csv=csv_path, timeout=900,
+    )
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            if "avg_time" in line.lower() or "max_error" in line.lower() or "aggregate" in line.lower():
+                print(line)
+    return csv_path
 
 
 @pytest.mark.multi_gpu
@@ -771,6 +812,22 @@ def test_allreduce_8gpu_accuracy(shape, dtype_str, mode):
     if phys_ng < 8:
         pytest.skip(f"Requires >= 8 physical GPUs, found {phys_ng}.")
     _run_subprocess_test(world_size=8, shape=shape, dtype_str=dtype_str, mode=mode)
+
+
+@pytest.mark.multi_gpu
+@pytest.mark.benchmark
+@pytest.mark.parametrize("shape,dtype_str,mode", _BENCHMARK_PARAMS)
+def test_allreduce_8gpu_benchmark(shape, dtype_str, mode):
+    """8-GPU allreduce benchmark test.
+
+    Uses 51 iters / 5 warmup to get stable timing data.
+    Performance regression is checked at the CI workflow level by comparing
+    this PR's results against the main branch (run separately).
+    """
+    phys_ng = _count_physical_gpus()
+    if phys_ng < 8:
+        pytest.skip(f"Requires >= 8 physical GPUs, found {phys_ng}.")
+    _run_subprocess_benchmark(world_size=8, shape=shape, dtype_str=dtype_str, mode=mode)
 
 
 @pytest.mark.multi_gpu
