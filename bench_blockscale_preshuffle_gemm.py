@@ -142,8 +142,11 @@ def select_tile_config(M: int, N: int, K: int, scale_block_k: int = 128):
             s += 12 if tm == 64 else 0
         if M <= 128:
             s += 6 if tn == 64 else (4 if tn == 128 else (2 if tn == 256 else 0))
-        else:
+        elif M <= 512:
             s += 8 if tn == 128 else (4 if tn == 64 else (4 if tn == 256 else 0))
+        else:
+            # Large M: prefer wide N tiles for more MFMAs per tile.
+            s += 10 if tn == 256 else (6 if tn == 128 else (3 if tn == 64 else 0))
         s += 6 if tk == 128 else 3
         return s
 
