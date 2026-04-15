@@ -1188,8 +1188,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="MXFP8 Blockscale GEMM benchmark")
-    parser.add_argument("--num_iters", type=int, default=20, help="Number of benchmark iterations")
-    parser.add_argument("--num_warmup", type=int, default=3, help="Number of warmup iterations")
+    parser.add_argument("--num_iters", type=int, default=50, help="Number of benchmark iterations")
+    parser.add_argument("--num_warmup", type=int, default=50, help="Number of warmup iterations")
     parser.add_argument("--out_dtype", type=str, default="bf16", choices=["fp16", "bf16"])
     parser.add_argument("--output_csv", type=str, default=None, help="Output CSV file")
     args = parser.parse_args()
